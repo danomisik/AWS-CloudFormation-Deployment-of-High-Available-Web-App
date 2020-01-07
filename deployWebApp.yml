@@ -1,0 +1,139 @@
+Description: >
+    Daniel Misik / Udacity Project 2 - Deploy of high avalaibile web app with CloudFormation
+Parameters:
+    EnvironmentName:
+        Description: An environment name that will be prefixed to resource names
+        Type: String
+    WebAppGroupInstanceType:
+        AllowedValues:
+          - t3.small
+          - t3.medium
+          - t3.large
+          - t3.xlarge
+          - t3.2xlarge
+        Default: t3.medium
+        Description: Amazon EC2 instance type for the Auto Scaling Group.
+        Type: String
+Resources:
+  LBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Allow http to our load balancer
+      SecurityGroupEgress: 
+      - IpProtocol: tcp 
+        FromPort: 80 
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      SecurityGroupIngress: 
+      - IpProtocol: tcp 
+        FromPort: 80 
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+  WebAppSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: Allow http to our web app and also ssh
+      SecurityGroupEgress: 
+      - IpProtocol: tcp 
+        FromPort: 0
+        ToPort: 65535
+        CidrIp: 0.0.0.0/0
+      SecurityGroupIngress: 
+      - IpProtocol: tcp 
+        FromPort: 80 
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${EnvironmentName}-VPCID"
+  WebAppLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udacity-demo-1/udacity.zip .
+          unzip -o udacity.zip
+      IamInstanceProfile: !Ref ProfileWithRolesForOurApp
+      ImageId: ami-0cc0a36f626a4fdf5
+      SecurityGroups:
+      - Ref: WebAppSecGroup
+      InstanceType: !Ref WebAppGroupInstanceType
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sdk"
+        Ebs:
+          VolumeSize: '12'
+  ProfileWithRolesForOurApp:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles:
+        - UdacityS3ReadOnlyEC2
+  WebAppGroup:
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties:
+        VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PRIV-NETS"
+        LaunchConfigurationName:
+          Ref: WebAppLaunchConfig
+        MinSize: '4'
+        MaxSize: '4'
+        TargetGroupARNs:
+        - Ref: WebAppTargetGroup
+  WebAppLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+      - Fn::ImportValue: !Sub "${EnvironmentName}-PUB2-SN"
+      SecurityGroups:
+      - Ref: LBSecGroup
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAppTargetGroup
+      LoadBalancerArn: !Ref WebAppLB
+      Port: '80'
+      Protocol: HTTP
+  ALBListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref WebAppTargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values: [/]
+      ListenerArn: !Ref Listener
+      Priority: 1
+  WebAppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 35
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 30
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId: 
+        Fn::ImportValue:
+          Fn::Sub: "${EnvironmentName}-VPCID"
+
+Outputs:
+  WebAppLBDNSName:
+    Description: The DNSName of the backup load balancer
+    Value: !Join [ "://", [ "http", !GetAtt WebAppLB.DNSName ] ]
+    Export:
+      Name: !Sub ${EnvironmentName}-WebAppLB-PublicIp
+      

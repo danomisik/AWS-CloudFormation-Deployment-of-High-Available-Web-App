@@ -1,0 +1,10 @@
+[
+    {
+        "ParameterKey": "EnvironmentName",
+        "ParameterValue": "UdacityProject"
+    },
+    {
+        "ParameterKey": "WebAppGroupInstanceType",
+        "ParameterValue": "t3.medium"
+    }
+]
